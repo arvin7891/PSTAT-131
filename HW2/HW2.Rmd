@@ -63,20 +63,12 @@ Steps for your recipe:
 4.  scale all predictors.
 
 
-```{r,warning=FALSE,message=FALSE}
+```{r}
 abalone_train<-abalone_train[,-9]
 abalone_recipe <- recipe(age ~ ., data = abalone_train) %>% 
   step_dummy(all_nominal_predictors())
 
-abalone_recipe_model<-abalone_recipe %>%
-  step_interact(terms = ~ shucked_weight:starts_with("type")) %>%
-  step_interact(terms = ~ longest_shell:diameter) %>%
-  step_interact(terms = ~ shucked_weight:shell_weight)  %>% 
-  step_center(all_numeric(), -all_outcomes(), -has_role('id variable')) %>% 
-  step_scale(all_numeric(), -all_outcomes(), -has_role('id variable')) 
-abalone_train_1<-abalone_recipe_model %>% 
-  prep() %>% 
-  bake(new_data = abalone_train)
+abalone_recipe_model<-abalone_recipe %>%  step_interact(terms = ~ shucked_weight:starts_with("type")) %>%  step_interact(terms = ~longest_shell:diameter) %>% step_interact(terms = ~ shucked_weight:shell_weight)  %>%  step_center(all_numeric(), -all_outcomes(), -has_role('id variable')) %>%  step_scale(all_numeric(), -all_outcomes(), -has_role('id variable')) 
 
 ```
 
