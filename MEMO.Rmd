@@ -1,0 +1,78 @@
+---
+title: "MEMO"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+### overview of dataset
+
+The election of 2020 was both intriguing and difficult to predict. Many statisticians were unable to forecast the outcome or made incorrect predictions. We're interested in two datasets: an election dataset with information on county, state, and federal votes, and information on the candidates that stood for office.
+In the 2020 presidential election, the census data, which contains county data, is our second dataset, and state demographic data, such as race, income, method of transportation, and system of government. Among other demographics, employment is a factor. We'd like to understand more about the election information and identifying the key factors that influence how individuals vote. We'll take care of it.
+This will be accomplished using data visualization, dimensionality reduction, clustering, and classification, among other methods further investigate the datasets to see which factors are most important.
+
+
+### An overview of your research questions
+Sampling and polling inaccuracy are two of the most significant challenges in predicting voter behavior and election predictions. The random sample chosen to anticipate the findings could have a higher concentration of people who lean politically one way or the other. As a result, the sample is skewed, resulting in a skewed prediction. Because this problem always exists, historical election results can be used to estimate this type of mistake. In addition, poll response rates have been rapidly declining in recent years.Reducible error, or error that can be estimated and integrated into the forecast, is the problem outlined above. The systematic error, also known as irreducible error, is a major problem with polls. This inaccuracy might be attributed to a weakness in the model or a failure to comprehend community sentiment on certain problems. Some polls predict that systemic error will cancel each other out due to the diversity of locales. However, if they are linked, the result could be a significant inaccuracy.
+
+
+### Proposed project timeline
+
+
+ During weeks 2-4, I plan to finish up my introduction and finish those dataset parts of the assignment. During weeks 5-8, I plan to work on my models  During the last part of the quarter, I will keep one week to make any adjustments that I find necessary and reach out for help if I am really struggling.
+
+### Question
+Is it possible to get some guide for each part of final project? Guide could help me to follow the correct path 
+
+
+
+
+### Potentially Useful Predictor Variables
+
+red state:
+Minority 
+Income
+Transit 
+Employed
+Professional 
+Services
+Clustering
+
+blue state:
+Minority 
+Income
+Transit 
+Employed
+Professional 
+Services
+Clustering
+
+swing state:
+Minority 
+Income
+Transit 
+Employed
+Professional 
+Services
+Clustering
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
