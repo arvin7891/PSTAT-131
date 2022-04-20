@@ -60,7 +60,7 @@ dim(df)
 dim(df_train)
 dim(df_test)
 
-colSums(is.na(df_train))/nrow(df_train)
+colSums(is.na(df_train))/ nrow(df_train)
 ```
 
 
