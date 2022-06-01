@@ -1,0 +1,569 @@
+---
+title: "PSTAT131 Final Project"
+author: 
+date: "2022/5/25"
+output:
+  html_document:
+    theme: paper
+    highlight: tango
+    code_folding: hide
+---
+## Introduction
+
+As a modern electronic payment method, credit card is usually issued by commercial banks or other financial institutions. Its main uses include: consumer payment, credit loan, transfer settlement, etc. At the current stage, the large-scale use of credit cards has brought great changes to the financial industry, but it has also created some risks. Due to the endless emergence of financial fraud methods and related negative news, how to do a good job of risk control in the Internet financial industry is also a big problem.  
+Therefore, it is very important to establish an effective model to help credit card companies identify fraudulent transactions, thereby reducing the proportion of fraud, reducing fraud losses, and promoting the healthy development of the credit card industry.
+
+## Loading Data and Packages
+
+The data for this project comes from the kaggle competition platform see <https://www.kaggle.com/datasets/mlg-ulb/creditcardfraud>, the dataset contains transactions made by credit cards in September 2013 by European cardholders. This dataset presents transactions that occurred in two days, where we have 492 frauds out of 284,807 transactions.  
+It contains only numerical input variables which are the result of a PCA transformation. Unfortunately, due to confidentiality issues, kaggle cannot provide the original features and more background information about the data. Features V1, V2, … V28 are the principal components obtained with PCA , the only features which have not been transformed with PCA are 'Time' and 'Amount'. Feature 'Time' contains the seconds elapsed between each transaction and the first transaction in the dataset. The feature 'Amount' is the transaction Amount, this feature can be used for example-dependant cost-sensitive learning. Feature 'Class' is the response variable and it takes value 1 in case of fraud and 0 otherwise.
+
+```{r Loading Data and Packages, message=FALSE, warning=FALSE, results="hide"}
+library(tidyverse) 
+library(tidymodels)
+library(corrplot) 
+library(caret) #down
+library(smotefamily) 
+library(janitor) 
+library(skimr)
+library(patchwork)
+library(lubridate)
+library(ranger)
+library(rlang)
+library(dplyr)
+#library(ggplot2)
+#library(corrr)
+library(klaR)
+library(MASS) #upsample
+#library(discrim)
+library(poissonreg)
+#library(stringr)
+library(installr)
+setwd('C:/Users/wilson/Desktop')
+df <- read_csv("creditcard.csv")
+head(df)
+```
+
+## Data Cleaning
+
+  . checking missing values
+We confirmed that none of the variables have missing values.
+
+```{r check missing values, message=FALSE, warning=FALSE, results="hide"}
+colSums(is.na(df))  
+```
+  .Clean names
+
+```{r clean names, message=FALSE, warning=FALSE, results="hide"}
+df %>% 
+  clean_names() 
+```
+## Data Split
+
+The dataset contains a total of 284807 samples,of which 80% of the data is used as training data about 227845 and 20% of the data is used as test data about 56962.   
+Stratified sampling was used as the Class distribution was skewed. (See more on that in the EDA).The data split was conducted prior to the EDA as I did not want to know anything about my testing data set before I tested my model on those observations.
+
+```{r data split, message=FALSE, warning=FALSE,results="hide"}
+set.seed(123)
+#stratified split according to class
+df_split <-df %>% 
+           initial_split(df,prop = 0.8, strata = "Class")
+df_train <- training(df_split)
+df_test <- testing(df_split)
+dim(df_train) 
+dim(df_test) 
+df_train %>% count(Class)
+df_test %>% count(Class)
+```
+## Exploratory Data Analysis
+
+###  checking class imbalance
+
+By observing the proportion of fraudulent transactions and non-fraudulent transactions, we found that the data has a serious imbalance, 99.8% of transactions are non-fraudulent transactions, and the proportion of fraudulent transactions is only about 0.17%.
+
+```{r Class distribution of the data, message=FALSE, warning=FALSE, results="hide"}
+df %>%
+  count(Class) %>% 
+  mutate(prop = n/sum(n))
+
+# class imbalance in percentage
+df_train %>%
+  count(Class) %>% 
+  mutate(prop = n/sum(n))
+```
+
+```{r plot Class distribution, message=FALSE, warning=FALSE, results="hide"}
+common_theme <- theme(plot.title = element_text(hjust = 0.5, face = "bold"))
+
+df_train %>%
+ggplot(aes(x = factor(Class), 
+                            y = stat(count), fill = factor(Class),
+                            label = scales::comma(stat(count)))) +
+  geom_bar(position = "dodge") + 
+  geom_text(stat = 'count',
+            position = position_dodge(.9), 
+            vjust = -0.5, 
+            size = 3) + 
+  scale_x_discrete(labels = c("No Fraud", "Fraud")) +
+  scale_y_continuous(labels = scales::comma)+
+  labs(x = 'Class', y = 'Count') +
+  ggtitle("Distribution of class labels") +
+  common_theme
+```
+
+###  Time feature
+
+The ‘Time’ feature looks pretty similar across both types of transactions.One could argue that fraudulent transactions are more uniformly distributed, while normal transactions have a cyclical distribution.
+
+```{r plot Time feature, message=FALSE, warning=FALSE, results="hide"}
+df_train %>%
+  ggplot(aes(x = Time, fill = factor(Class))) + 
+  geom_histogram(bins = 100)+
+  labs(x = 'Time in seconds since first transaction', y = 'No. of transactions') +
+  ggtitle('Distribution of time of transaction by class') +
+  facet_grid(Class ~ ., scales = 'free_y') + 
+  common_theme
+```
+
+###  Features of transaction amount for class
+
+By comparing the amount of fraudulent and non-fraudulent transactions, we found that the amount of fraudulent transactions will be smaller compared to non-fraudulent transactions.
+
+```{r plot Amount feature, message=FALSE, warning=FALSE, results="hide"}
+df_train %>%
+ggplot(aes(x = factor(Class), y = Amount)) + 
+  geom_boxplot() + 
+  labs(x = 'Class', y = 'Amount') +
+  ggtitle("Distribution of transaction amount by class") +
+  common_theme
+```
+
+###  correlation matrix
+
+Through the correlation matrix heat map between variables, we can find out there is a correlation between fraud and amount, V1-V18, and the correlation with other variables is not obvious. In addition, the amount is correlated with other variables, but the variables v1-v28 have no correlation with each other.
+
+```{r plot correlation matrix, message=FALSE, warning=FALSE, results="hide"}
+correlations <- cor(df_train[,-1],method="pearson") %>%
+corrplot( number.cex = .9, method = "circle", type = "full",tl.col = "black",title ='correlation matrix.')
+```
+
+## Model Building
+
+###  Data prepare
+
+(1)'Time' feature does not indicate the actual time of the transaction and is more of listing the data in chronological order.Based on the data visualization above we assume that ‘Time’ feature has little or no significance in correctly classifying a fraud transaction and hence eliminate this column from further analysis.  
+(2)Convert the dependent variable to a factor variable and assign a value,while standardizing each independent variable.  
+(3)In order to make the training data and test data completely independent and do not affect each other,we preprocess them separately
+
+```{r data prepare, message=FALSE, warning=FALSE, results="hide"}
+train <- df_train %>%
+  dplyr::select(-Time) %>%
+  mutate(Class=factor(Class)) 
+levels(train$Class)<-c("Not_Fraud", "Fraud")
+train[,-30] <- scale(train[,-30])
+
+test <- df_test %>% 
+  dplyr::select(-Time) %>% 
+  mutate(Class=factor(Class))
+levels(test$Class) <- c("Not_Fraud", "Fraud")
+test[,-30] <- scale(test[,-30])
+```
+
+###  Choosing sampling technique
+
+Due to the imbalanced distribution of fraudulent and non-fraudulent transactions, standard machine learning algorithms struggle with accuracy on imbalanced data, they are accuracy driven and aim to minimize the overall error to which the minority class contributes very little. The methods to deal with this problem are widely known as 'Sampling Methods'. Generally, these methods aim to modify an imbalanced data into balanced distribution using some mechanism. The modification occurs by altering the size of original data set and provide the same proportion of balance.  
+Below are the methods used here to treat the imbalanced dataset: undersampling, oversampling, synthetic data generation. In order to choose the most suitable treatment method, we separately process the training data for these three techniques, then build a linear regression model and test it on the test set data. Since the test set data is unbalanced, we use accuracy and recall to evaluate the performance, especially recall, since it is more important for us to identify fraudulent transactions.  
+In the end, we found that based on the linear regression model, the prediction effect is best after being processed by the smote algorithm. Therefore, we chose the smote algorithm to deal with the imbalance of the training data for the subsequent training of various machine learning models.  
+
+.downsampling 
+
+```{r downsampling, message=FALSE, warning=FALSE, results="hide"  }
+# downsampling
+set.seed(123)
+down_train <- downSample(x = train[, -ncol(train)],
+                         y = train$Class)
+down_train %>% 
+  count(Class)%>%
+  mutate(prop = n/sum(n))
+```
+.upsampling
+```{r upsampling, message=FALSE, warning=FALSE, results="hide"  }
+# upsampling
+set.seed(123)
+up_train <- upSample(x = train[, -ncol(train)],y = train$Class)
+up_train %>% 
+  count(Class)%>%
+  mutate(prop = n/sum(n))
+```
+
+.smote
+```{r smote, message=FALSE, warning=FALSE, results="hide"  }
+# smote
+set.seed(123)
+smote_train <- SMOTE(train[, -ncol(train)],train$Class)$data
+colnames(smote_train)[30] <- "Class"
+
+smote_train%>% 
+  count(Class)%>%
+  mutate(prop = n/sum(n))
+```
+
+We first use the original training data to train the logistic regression model, the test results is: accuracy 99.9%, recall 60%.
+```{r use original data, message=FALSE, warning=FALSE}
+recipe <- recipe(Class ~V1+V2+V3+V4+V5+V6+V7+V8+V9+V10+V11+V12+V13+V14+V15+V16+V17+V18+V19+V20
+                   +V22+V23+V24+V25+V26+V27+V28+Amount, 
+                 data = train)
+log_model <- logistic_reg() %>% 
+  set_engine("LiblineaR")%>% 
+  set_mode("classification")
+
+log_workflow <- workflow() %>% 
+  add_model(log_model) %>% 
+  add_recipe(recipe)
+
+#fit the logistic model to the original training set:
+set.seed(123)
+ori_log_fit <- fit(log_workflow, train)
+ori_log_fit %>% 
+  extract_fit_parsnip() %>% 
+  tidy()
+#test using original test set
+test_pred <- predict(ori_log_fit, new_data = test %>% dplyr::select(-Class))
+#metric set
+test_res <- bind_cols(test_pred, test%>% dplyr::select(Class))
+#head(test_res)
+T<-table(test_res)
+TP<-T[4]
+FN<-T[3]
+FP<-T[2]
+TN<-T[1]
+accuracy=(TP+TN)/sum(T) #0.99921
+recall=TP/(TP+FN) #0.61
+```
+
+
+Then We use the down sample data to train the logistic regression model, the test results is: accuracy 97.2%, recall 89%.
+```{r use down sample data, message=FALSE, warning=FALSE, results="hide"  }
+#fit the logistic model to the down training set:
+set.seed(123)
+down_log_fit <- fit(log_workflow, down_train)
+#test
+down_test_pred <- predict(down_log_fit, new_data = test %>% dplyr::select(-Class))
+#metric set
+down_test_res <- bind_cols(down_test_pred, test%>% dplyr::select(Class))
+down_T<-table(down_test_res)
+TP1<-down_T[4]
+FN1<-down_T[3]
+FP1<-down_T[2]
+TN1<-down_T[1]
+down_accuracy=(TP1+TN1)/sum(down_T) #0.9721218
+down_recall=TP1/(TP1+FN1) #0.89
+```
+
+Then We use the up sample data to train the logistic regression model, the test results is: accuracy 97.6%, recall 90%.
+```{r use up sample data, message=FALSE, warning=FALSE, results="hide"  }
+set.seed(123)
+up_log_fit <- fit(log_workflow, up_train)
+#test
+up_test_pred <- predict(up_log_fit, new_data = test %>% dplyr::select(-Class))
+#metric set
+up_test_res <- bind_cols(up_test_pred, test%>% dplyr::select(Class))
+up_T<-table(up_test_res)
+TP2<-up_T[4]
+FN2<-up_T[3]
+FP2<-up_T[2]
+TN2<-up_T[1]
+up_accuracy=(TP2+TN2)/sum(up_T) #0.9759489
+up_recall=TP2/(TP2+FN2) #0.9
+```
+
+Then We use the smote sample data to train the logistic regression model, the test results is: accuracy 97.6%, recall 91%.
+```{r use smote sample data, message=FALSE, warning=FALSE, results="hide"  }
+set.seed(123)
+smote_log_fit <- fit(log_workflow, smote_train)
+#test
+smote_test_pred <- predict(smote_log_fit, new_data = test %>% dplyr::select(-Class))
+#metric set
+smote_test_res <- bind_cols(smote_test_pred, test%>% dplyr::select(Class))
+smote_T<-table(smote_test_res)
+TP3<-smote_T[3]
+FN3<-smote_T[4]
+FP3<-smote_T[1]
+TN3<-smote_T[2]
+smote_accuracy=(TP3+TN3)/sum(smote_T) #0.9764931
+smote_recall=TP3/(TP3+FN3) #0.91
+```
+
+###  Model select using smote data
+
+I decided to run cross fold validation but not repeat on the following four models.
+
+
+1.Logistic regression model
+
+
+2.Boosted Tree Model 
+
+
+3.KNN model
+
+
+4.Nearest Neighbors model 
+
+####  Building the Recipe and Tweaking The Data
+
+Through the previous test,we know that the smote algorithm has the best effect on our unbalanced data,so the subsequent model training uses the training data processed by smote.And our training data has 284807 samples, the amount of data is very large, when using cross-validation to fold training set, we no longer repeat to reduce the running time of the model.
+
+```{r Building the Recipe and Tweaking The Data, message=FALSE, warning=FALSE, results="hide"  }
+set.seed(123)
+smote_train_folds <- vfold_cv(smote_train, v = 10) 
+#no repeat to reduce the running time
+recipe<-recipe(Class ~ ., data = smote_train)
+recipe
+```
+
+####  logistic regression model
+
+I tuned penalty, set mode to "classification" (because my outcome is a factor variable), and used the LiblineaR engine. I stored this model and my recipe in a workflow and set up the tuning grid.
+
+```{r set logistic model, message=FALSE, warning=FALSE, results="hide"  }
+log_model <- logistic_reg(penalty = tune(), mixture = 1) %>% 
+  set_engine("LiblineaR")%>% 
+  set_mode('classification')
+
+log_workflow <- workflow() %>% 
+  add_model(log_model) %>% 
+  add_recipe(recipe)
+
+log_grid <- tibble(penalty = 10^seq(-3, -2, length.out = 20))
+```
+
+Then, I executed my model by tuning and fitting. This process took 1 hours and 30 minutes! I wrote out the results and the workflow so I would not need to run it again.
+```{r execute logistic model, message=FALSE, warning=FALSE, results="hide" ,eval=FALSE}
+log_res <- log_workflow %>% 
+  tune_grid(resamples = smote_train_folds,
+            grid = log_grid,
+            control = control_grid(save_pred = TRUE),
+            metrics = metric_set(roc_auc))
+
+#save(log_res, log_workflow, file = "D:/log_res.rda")
+```
+
+Taking a quick peak at the autoplot() function and show_best() based on roc_auc metric
+```{r show logistic best, message=FALSE, warning=FALSE, results="hide"  }
+load("D:/log_res.rda")
+autoplot(log_res, metric = "roc_auc")  ##0.002-0.003 best
+show_best(log_res, metric = "roc_auc") %>% dplyr::select(-.estimator, -.config)
+```
+
+We’ll create a workflow that has tuned in the name, so we can identify it. We’ll finalize the workflow by taking the parameters from the best model (the logistic regression model) using the select_best() function.
+```{r logistic final model, message=FALSE, warning=FALSE, results="hide"  }
+log_workflow_tuned <- log_workflow %>% 
+  finalize_workflow(select_best(log_res, metric = "roc_auc"))
+log_final <- fit(log_workflow_tuned, smote_train)
+```
+
+Lets fit the model to the testing data set and use prediction value and true value to create a table for calculating accuracy and recall.The accuracy is 97.6%,recall is 91%
+```{r traing logistic model, message=FALSE, warning=FALSE, results="hide"  }
+log_test_res <- predict(log_final, new_data = test) %>%
+  bind_cols(test %>% dplyr::select(Class))
+logT<-table(log_test_res)
+TP4<-logT[3]
+FN4<-logT[4]
+FP4<-logT[1]
+TN4<-logT[2]
+log_accuracy=(TP4+TN4)/sum(logT) #0.9764053
+log_recall=TP4/(TP4+FN4) #0.91
+```
+
+####  Boosted Tree Model
+
+Similarly, I set the model with tuning parameters min_n, mtry. I set the engine as xgboost and set mode to "classification". I created a workflow.
+
+```{r set bt model, message=FALSE, warning=FALSE, results="hide"  }
+bt_model <- boost_tree(mode = "regression",
+                       min_n = tune(),
+                       mtry = tune()) %>%
+  set_engine("xgboost")%>%
+  set_mode('classification')
+
+bt_workflow <- workflow() %>% 
+  add_model(bt_model) %>% 
+  add_recipe(recipe)
+
+bt_params <- extract_parameter_set_dials(bt_model) %>% 
+  update(mtry = mtry(range= c(2, 20)),
+         min_n = min_n(range= c(2, 20))
+  )
+
+# define grid
+bt_grid <- grid_regular(bt_params, levels = 2)
+```
+
+Then, I executed my model by tuning and fitting. This process took 5 hours minutes! I wrote out the results and the workflow so I would not need to run it again
+```{r execute bt model, message=FALSE, warning=FALSE, results="hide" ,eval=FALSE }
+bt_res <- bt_workflow %>% 
+  tune_grid(resamples = smote_train_folds,
+            grid = bt_grid,
+            control = control_grid(save_pred = TRUE),
+            metrics = metric_set(roc_auc))
+
+#save(bt_res, bt_workflow, file = "D:/bt_res.rda")
+```
+
+Taking a quick peak at the autoplot() function and show_best() based on roc_auc metric
+```{r show bt best, message=FALSE, warning=FALSE, results="hide"  }
+load("D:/bt_res.rda")
+autoplot(bt_res, metric = "roc_auc")  
+show_best(bt_res, metric = "roc_auc") %>% dplyr::select(-.estimator, -.config)
+```
+
+We’ll create a workflow that has tuned in the name, so we can identify it. We’ll finalize the workflow by taking the parameters from the best model (the logistic regression model) using the select_best() function.
+```{r bt final model, message=FALSE, warning=FALSE, results="hide"  }
+bt_workflow_tuned <- bt_workflow %>% 
+  finalize_workflow(select_best(bt_res, metric = "roc_auc"))
+bt_final <- fit(bt_workflow_tuned, smote_train)
+```
+
+Lets fit the model to the testing data set and use prediction value and true value to create a table for calculating accuracy and recall.The accuracy is 99%,recall is 86%
+```{r traing bt model, message=FALSE, warning=FALSE, results="hide"  }
+bt_test_res <- predict(bt_final, new_data = test) %>%
+  bind_cols(test %>% dplyr::select(Class))
+btT<-table(bt_test_res)
+TP5<-btT[3]
+FN5<-btT[4]
+FP5<-btT[1]
+TN5<-btT[2]
+bt_accuracy=(TP5+TN5)/sum(btT) #0.9915909
+bt_recall=TP5/(TP5+FN5) #0.85
+```
+
+####  Nearest Neighbors Model
+
+Similarly, I set the model with tuning parameters neighbors. I set the engine as kknn and set mode to "classification". I created a workflow.
+
+```{r set knn model, message=FALSE, warning=FALSE, results="hide" }
+knn_model <- nearest_neighbor(mode = "regression",
+                              neighbors = tune()
+) %>%
+  set_engine("kknn")%>%
+  set_mode('classification')
+
+knn_workflow <- workflow() %>% 
+  add_model(knn_model) %>% 
+  add_recipe(recipe)
+
+knn_params <- extract_parameter_set_dials(knn_model)
+
+# define grid
+knn_grid <- grid_regular(knn_params, levels = 4)
+```
+
+Then, I executed my model by tuning and fitting. This process took 3 hours ! I wrote out the results and the workflow so I would not need to run it again
+```{r execute knn model, message=FALSE, warning=FALSE, results="hide",eval=FALSE}
+knn_res <- knn_workflow %>% 
+  tune_grid(resamples = smote_train_folds,
+            grid = knn_grid
+  )
+
+#save(knn_res, knn_workflow, file = "D:/knn_res.rda")
+```
+
+Taking a quick peak at the autoplot() function and show_best() based on roc_auc metric
+```{r show knn best, message=FALSE, warning=FALSE, results="hide"  }
+load("D:/knn_res.rda")
+autoplot(knn_res, metric = "roc_auc")  ##
+show_best(knn_res, metric = "roc_auc") %>% dplyr::select(-.estimator, -.config)
+```
+
+We’ll create a workflow that has tuned in the name, so we can identify it. We’ll finalize the workflow by taking the parameters from the best model (the knn regression model) using the select_best() function.
+```{r knn final model, message=FALSE, warning=FALSE, results="hide",eval=FALSE }
+knn_workflow_tuned <- knn_workflow %>% 
+  finalize_workflow(select_best(knn_res, metric = "roc_auc"))
+knn_final <- fit(knn_workflow_tuned, smote_train)
+```
+
+Lets fit the model to the testing data set and use prediction value and true value to create a table for calculating accuracy and recall.The accuracy is 99.6%,recall is 80%
+```{r traing knn model, message=FALSE, warning=FALSE, results="hide"  ,eval=FALSE}
+knn_test_res <- predict(knn_final, new_data = test) %>%
+  bind_cols(test %>% dplyr::select(Class))
+knnT<-table(knn_test_res)
+TP6<-knnT[3]
+FN6<-knnT[4]
+FP6<-knnT[1]
+TN6<-knnT[2]
+knn_accuracy=(TP6+TN6)/sum(knnT) 
+knn_recall=TP6/(TP6+FN6) 
+```
+
+####  Random Forest Model
+
+Due to the large amount of computation of random forest, training the model with all the training data will run for more than 10 hours, so we randomly sample the training data, and take half of the data to train the model to reduce the training time.  
+Similarly, I set the model with tuning parameters mtry I set the engine as ranger and set mode to "classification". I created a workflow.
+
+```{r set rf model, message=FALSE, warning=FALSE, results="hide"  }
+index<-sample(c(1:dim(smote_train)[1]),size=round(dim(smote_train)[1]/2))
+sampe_smote_train<-smote_train[index,]
+sample_smote_train_folds <- vfold_cv(sampe_smote_train, v = 10) #repeat need long time
+
+rf_model <- rand_forest(mode = "regression",
+                        min_n = tune(),
+                        mtry = tune()) %>%
+  set_engine("ranger")%>%
+  set_mode('classification')
+
+rf_workflow <- workflow() %>% 
+  add_model(rf_model) %>% 
+  add_recipe(recipe)
+
+rf_params <- extract_parameter_set_dials(rf_model) %>% 
+  update(mtry = mtry(range= c(2, 20))
+  )
+
+# define grid
+rf_grid <- grid_regular(rf_params, levels = 2)
+```
+
+Then, I executed my model by tuning and fitting. This process took 12 hours ! I wrote out the results and the workflow so I would not need to run it again
+```{r execute rf model, message=FALSE, warning=FALSE, results="hide",eval=FALSE}
+rf_res <- rf_workflow %>% 
+  tune_grid(resamples = sample_smote_train_folds,
+            grid = rf_grid,
+            control = control_grid(save_pred = TRUE),
+            metrics = metric_set(roc_auc))
+
+#save(rf_res, rf_workflow, file = "D:/rf_res.rda")
+```
+
+Taking a quick peak at the autoplot() function and show_best() based on roc_auc metric
+```{r show rf best, message=FALSE, warning=FALSE, results="hide"  }
+load("D:/rf_res.rda")
+autoplot(rf_res, metric = "roc_auc")  ##
+show_best(rf_res, metric = "roc_auc") %>% dplyr::select(-.estimator, -.config)
+```
+
+We’ll create a workflow that has tuned in the name, so we can identify it. We’ll finalize the workflow by taking the parameters from the best model (the knn regression model) using the select_best() function.
+```{r rf final model, message=FALSE, warning=FALSE, results="hide"  }
+rf_workflow_tuned <- rf_workflow %>% 
+  finalize_workflow(select_best(rf_res, metric = "roc_auc"))
+rf_final <- fit(rf_workflow_tuned, smote_train)
+```
+
+Lets fit the model to the testing data set and use prediction value and true value to create a table for calculating accuracy and recall.The accuracy is 99.9%,recall is 83%
+```{r traing rf model, message=FALSE, warning=FALSE, results="hide"  }
+rf_test_res <- predict(rf_final, new_data = test) %>%
+  bind_cols(test %>% dplyr::select(Class))
+rfT<-table(rf_test_res)
+TP7<-rfT[3]
+FN7<-rfT[4]
+FP7<-rfT[1]
+TN7<-rfT[2]
+rf_accuracy=(TP7+TN7)/sum(rfT) #
+rf_recall=TP7/(TP7+FN7) #
+```
+
+## Conclusion
+
+In this project we have tried to show different methods of dealing with unbalanced datasets like the fraud credit card transaction dataset where the instances of fraudulent cases is few compared to the instances of normal transactions. We have argued why accuracy is not a appropriate measure of model performance here and used the metric recall and accuracy to evaluate how different methods of oversampling, undersampling and smotesampling the response variable can lead to better model training. We concluded that the smotesampling technique works best on the dataset based on logistic regression models with not tune. So,we final use smote technique to deal with our training data.  
+Finally, we use the balanced data processed by the smote technology to train various machine. models. We selected four commonly machine learning models, namely logistic regression, boosted tree, Nearest Neighbors, and randomforest, and adjusted the parameters of each model. And then used the test data to evaluate the effect of each model. According to the performance of the two indicators of accuracy and recall, we believe that the logistic regression model has the best prediction effect, and its recall rate is the highest, reaching 91%, and its accuracy can also reach 97.6%.
+
