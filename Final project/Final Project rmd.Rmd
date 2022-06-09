@@ -134,7 +134,7 @@ df_train %>%
 ggplot(aes(x = factor(Class), y = Amount,fill=factor(Class))) + 
   geom_boxplot(outlier.shape = NA) + 
   labs(x = 'Class', y = 'Amount') +
-  scale_y_continuous(limits = quantile(df_train$Amount,c(0.1,0.9)))
+  scale_y_continuous(limits = quantile(df_train$Amount,c(0.1,0.9)))+
   ggtitle("Distribution of transaction amount by class") +
   common_theme
 ```
